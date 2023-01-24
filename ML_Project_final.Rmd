@@ -1,0 +1,154 @@
+---
+title: "ML_Project"
+author: "Muskaan Singhania, Peyton Lewis, Ryan Lee, Sai Bhargav, Samarth Mishra, Srividya Rayaprolu"
+date: '2022-07-31'
+output: pdf_document
+---
+
+We utilized a Zillow data set that recorded housing prices in Austin, TX spanning the years 2018-2021, along with numerous features. After cleaning our data set, we performed a series of linear regression models, Lasso/Ridge models, weighted/un-weighted KNN models, and a series of bagging and boosting models to reach our best fitting model, a Boosting model, which is specified in the code below, in order to most accurately predict Austin housing prices. This rmd file consists the code for Regression tree analysis, Bagging, Random Forest and finally Boosting models the results of which can be reproduced.
+
+**Change the working directory to source file location using session drop down above to run the code seamlessly**
+```{r}
+library(readr)
+library(tree)
+library(ISLR2)
+library(tidyverse)
+library(dplyr)
+library(scales)
+
+Housing <- read.csv("HousingPrices_edited.csv", header = TRUE)
+attach(Housing)
+clean <- data.frame(latestPrice, latitude, longitude, propertyTaxRate, hasAssociation,age, livingAreaSqFt, lotSizeSqFt, avgSchoolRating,numOfBathrooms,numOfBedrooms)
+#clean_range <- as.data.frame(rescale(select(clean, c(2:11)), to = c(0, 1)))
+x <- clean[,2:11]
+range01 <- function(x) {
+  (x - min(x)) / (max(x) - min(x))
+}
+
+# Scaling latestPrice to log scale
+clean[,1] <- log(clean[,1])
+
+# Scaling remaining variables between 0 and 1
+clean[,2:11] <- apply(clean[,2:11], MARGIN = 2, FUN = range01)
+clean
+```
+
+Regression tree analysis. Building a complex tree and then pruning it back.
+```{r Regression tree analysis}
+# Trees Linear Regression
+library(tree)
+set.seed(1)
+train <- sample(1:nrow(clean), nrow(clean)/2)
+tree.clean <- tree(latestPrice ~ ., data = clean, subset = train, mindev = 0.0005)
+
+summary(tree.clean)
+
+plot(tree.clean)
+text(tree.clean, pretty = 10)
+
+# Using unpruned tree to make predictions on test set
+latestPrice.pred.up <- predict(tree.clean, newdata = clean[-train, ])
+clean.test <- clean[-train, "latestPrice"]
+plot(latestPrice.pred.up, clean.test)
+abline(0,1)
+RMSE_tree.up = sqrt(mean((latestPrice.pred.up - clean.test)^2))
+summary(clean.test)
+print(c("For unpruned tree, the RSME is:",RMSE_tree.up), quote = TRUE)
+
+#Cross-Validation: Finding best tree size
+cv.clean <- cv.tree(tree.clean)
+plot(cv.clean$size, cv.clean$dev, type = "b")
+
+# Choosing best tree size for lowest deviation
+which.min(cv.clean$size)
+
+# Pruning Tree
+prune.clean <- prune.tree(tree.clean, best = 20)
+plot(prune.clean)
+text(prune.clean, pretty = 10)
+
+
+# Using pruned tree to make predictions on test set
+latestPrice.pred.p <- predict(prune.clean, newdata = clean[-train, ])
+clean.test.p <- clean[-train, "latestPrice"]
+plot(latestPrice.pred.p, clean.test.p)
+abline(0,1)
+RMSE_tree.p = sqrt(mean((latestPrice.pred.p - clean.test.p)^2))
+summary(clean.test.p)
+
+print(c("When the tree size is 20, the RSME is:",RMSE_tree.p), quote = TRUE)
+```
+
+
+The following code is for bagging with *ntree = 900*.
+```{r Optimized Bagging Model}
+# Bagging
+set.seed(1)
+# Random Forests
+train <- sample(1:nrow(clean)[1], nrow(clean)[1] / 2)
+Housing.train <- clean[train,]
+Housing.test <- clean[-train,"latestPrice"]
+
+library(randomForest)
+set.seed(1)
+
+bag.Housing <- randomForest(latestPrice ~ ., data = clean, subset = train, importance = TRUE, mtry = 10, ntree = 900)
+print(bag.Housing)
+
+bag.pred <- predict(bag.Housing, newdata = clean[-train,])
+RMSE.bag = sqrt(mean((bag.pred - Housing.test)^2))
+
+importance(bag.Housing)
+varImpPlot(bag.Housing)
+
+#plot(bag.pred, Housing.test)
+#abline(0,1)
+print(c("When bagging, the RSME is:",RMSE.bag))
+```
+
+The following code is for random forest with *mtry = 4*
+```{r Optimized Random Forest Model}
+# Random Forest
+library(randomForest)
+library(ipred)
+
+set.seed(1)
+# Random Forests
+train <- sample(1:nrow(clean)[1], nrow(clean)[1] / 2)
+Housing.train <- clean[train,]
+Housing.test <- clean[-train,]
+
+rf.Housing <- randomForest(latestPrice ~ ., data = clean,
+                           subset = train, mtry = 4, importance = TRUE, xtest = subset(Housing.test, select=-latestPrice), ytest = Housing.test$latestPrice)
+print(rf.Housing)
+
+importance(rf.Housing)
+varImpPlot(rf.Housing)
+```
+If we see the summary of the Random Forest, we observe that the test MSE is at **0.07** which gives us the test RMSE of **0.2646**.
+
+```{r Optimized Boosting model}
+# Boosting
+library(gbm)
+
+train <- sample(1:nrow(clean)[1], nrow(clean)[1] / 2)
+Housing.train <- clean[train,]
+Housing.test <- clean[-train,'latestPrice']
+
+set.seed(1)
+# Tuned Boosting Model
+boost.Housing.tune <- gbm(latestPrice ~ ., data = clean[train, ],
+                     distribution = "gaussian", n.trees = 375, interaction.depth = 10, shrinkage = 0.06, verbose = F)
+
+boost.pred.tune <- predict(boost.Housing.tune,
+                      newdata = clean[-train, ], n.trees = 375, interaction.depth = 10, shrinkage = 0.06, verbose = F)
+RMSE_boost.tune <- sqrt(mean((boost.pred.tune - Housing.test)^2))
+RMSE_boost.tune
+
+summary(boost.Housing.tune)
+plot(boost.pred.tune, Housing.test)
+plot(boost.Housing.tune, i= "latitude", col = 'red')
+plot(boost.Housing.tune, i= "longitude", col = 'blue')
+```
+With the optimized Boosting model we get a test RMSE of **0.2625** which is by far the best we could reach.
+
